@@ -1,6 +1,7 @@
 import { Notice } from "obsidian";
 import { CST, parseDocument } from "yaml";
 import { Replacement } from "./Tag";
+import { removeInlineTags, removeFromFrontMatter } from "./removal";
 
 export class File {
 
@@ -38,6 +39,41 @@ export class File {
         }
     }
 
+    /** @param {import("./Tag").Tag} tag */
+    async removed(tag) {
+        // Never let one note abort the whole bulk run: any failure (I/O, changed
+        // file, bad frontmatter) warns and skips that note, reported as "skipped".
+        try {
+            const file = this.app.vault.getAbstractFileByPath(this.filename);
+            const original = await this.app.vault.read(file);
+            let text;
+            try {
+                text = removeInlineTags(original, this.tagPositions);
+            } catch (e) {
+                return this.skip(e, `File ${this.filename} has changed`);
+            }
+            if (this.hasFrontMatter) {
+                try {
+                    text = removeFromFrontMatter(text, tag);
+                } catch (e) {
+                    return this.skip(e, `Could not process frontmatter of ${this.filename}`);
+                }
+            }
+            if (text !== original) {
+                await this.app.vault.modify(file, text);
+                return true;
+            }
+        } catch (e) {
+            return this.skip(e, `Could not update ${this.filename}`);
+        }
+    }
+
+    /** Warn about a skipped note and signal it to the caller. */
+    skip(e, message) {
+        new Notice(message + "; skipping");
+        console.error(message, e);
+        return "skipped";
+    }
     /** @param {Replacement} replace */
     replaceInFrontMatter(text, replace) {
         const [empty, frontMatter] = text.split(/^---\r?$\n?/m, 2);

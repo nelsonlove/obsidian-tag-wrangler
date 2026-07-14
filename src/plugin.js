@@ -1,5 +1,5 @@
 import {Component, Keymap, Menu, Notice, parseFrontMatterAliases, Plugin} from "obsidian";
-import {renameTag, findTargets} from "./renaming";
+import {renameTag, removeTag, findTargets} from "./renaming";
 import {Tag} from "./Tag";
 import {around} from "monkey-around";
 import {Confirm, use, app} from "@ophidian/core";
@@ -252,6 +252,7 @@ export default class TagWrangler extends Plugin {
             random = this.app.plugins.plugins["smart-random-note"]
         ;
         menu.addItem(item("tag-rename", "pencil", "Rename #"+tagName, () => this.rename(tagName)))
+        menu.addItem(item("tag-rename", "trash", "Remove #"+tagName+" from all notes", () => this.remove(tagName)))
 
         if (tagPage) {
             menu.addItem(
@@ -300,6 +301,11 @@ export default class TagWrangler extends Plugin {
 
     async rename(tagName, toName=tagName) {
         try { await renameTag(this.app, tagName, toName); }
+        catch (e) { console.error(e); new Notice("error: " + e); }
+    }
+
+    async remove(tagName) {
+        try { await removeTag(this.app, tagName); }
         catch (e) { console.error(e); new Notice("error: " + e); }
     }
 
