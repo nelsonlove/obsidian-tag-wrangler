@@ -86,8 +86,15 @@ Tag Wrangler already supports — tag pane, reading view, edit mode, and the
 - A tag **alone on its own line** -> remove the whole line (no blank-line litter).
 - Frontmatter array `tags: [a, project, b]` -> `tags: [a, b]`; list form drops the
   `- project` item; string form `tags: a project b` -> `tags: a b`.
-- If removal empties the field, **leave `tags: []`** — do not delete the key or
-  otherwise restructure frontmatter (minimal surprise).
+- Matching is on the **parsed** YAML value, never the raw source slice, so
+  quoted tags (`tags: "foo"`, `tags: '#a #b'`) are removed too rather than
+  silently surviving. A surviving quoted scalar is re-rendered via the YAML
+  library so quoting stays correct (e.g. `#keep` stays quoted).
+- If removal empties the field, **remove the whole field** (key + value lines) —
+  leaving no empty-tags artifact (`tags: ""`, `tags:` null, or `tags: []`). Both
+  review passes flagged empty-field remnants as noise across a bulk edit.
+- Inline tags wrapped in a bracket pair (`(#tag)`, `[#tag]`) remove the brackets
+  too; CRLF files do not leave an orphaned carriage return.
 - **`aliases:` entries are left untouched**, even when they are tag-aliases —
   those define Tag Wrangler *tag pages*, and "remove the tag" should not silently
   dismantle a tag page. (Rename touches them; removal deliberately does not.)

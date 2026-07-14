@@ -1,4 +1,4 @@
-import { parseDocument, isSeq, isScalar } from "yaml";
+import { parseDocument, isSeq, isScalar, Document } from "yaml";
 import { Tag } from "./Tag";
 
 // Raised when a recorded tag position no longer matches the file's current
@@ -24,9 +24,11 @@ export class FrontMatterParseError extends Error {
 // A line whose only non-tag content is optional indentation and a single list
 // marker ("-", "*", "+", "1.", "1)") — removing the tag should drop the line.
 const LIST_MARKER_LINE = /^\s*([-*+]|\d+[.)])?\s*$/;
+const CLOSERS = { "(": ")", "[": "]", "{": "}" };
 
 // Remove a single inline tag occupying [start, end).
 //   - Tag alone on its line (or only a bullet + the tag) -> remove the line.
+//   - Tag wrapped in a bracket pair -> remove the brackets too.
 //   - Otherwise -> remove the tag plus one adjacent space (prefer trailing).
 export function removeInlineTag(text, start, end) {
     const lineStart = text.lastIndexOf("\n", start - 1) + 1;
@@ -40,12 +42,17 @@ export function removeInlineTag(text, start, end) {
         if (lineEnd < text.length) {
             return text.slice(0, lineStart) + text.slice(lineEnd + 1);
         }
-        // Last line with no trailing newline: also drop the preceding newline.
-        const dropFrom = lineStart > 0 ? lineStart - 1 : lineStart;
+        // Last line with no trailing newline: drop the preceding line break (\n or \r\n).
+        let dropFrom = lineStart;
+        if (lineStart > 0) {
+            dropFrom = lineStart - 1;
+            if (dropFrom > 0 && text[dropFrom - 1] === "\r") dropFrom -= 1;
+        }
         return text.slice(0, dropFrom) + text.slice(lineEnd);
     }
 
     let s = start, e = end;
+    if (CLOSERS[text[s - 1]] && text[e] === CLOSERS[text[s - 1]]) { s -= 1; e += 1; }
     if (text[e] === " " || text[e] === "\t") e += 1;
     else if (s > 0 && (text[s - 1] === " " || text[s - 1] === "\t")) s -= 1;
     return text.slice(0, s) + text.slice(e);
@@ -69,10 +76,12 @@ export function removeInlineTags(text, tagPositions) {
 }
 
 // Remove `tag` (and its sub-tags) from the `tags:`/`tag:` fields of a file's
-// YAML frontmatter. Edits are applied as source-range splices so unrelated
-// fields, comments, quoting, and separators are preserved byte-for-byte.
-// `aliases:` is deliberately left untouched. Throws FrontMatterParseError if the
-// frontmatter is malformed; returns the text unchanged if nothing matched.
+// YAML frontmatter. Matching is done on parsed AST values (never raw source, so
+// quoted tags still match). Edits are source-range splices, so unrelated fields,
+// comments, and quoting are preserved byte-for-byte; only the edited field can
+// change shape. A field emptied of tags is removed entirely. `aliases:` is left
+// untouched. Throws FrontMatterParseError on malformed frontmatter; returns the
+// text unchanged if nothing matched.
 export function removeFromFrontMatter(text, tag) {
     const parts = text.split(/^---\r?$\n?/m, 2);
     const [empty, frontMatter] = parts;
@@ -87,67 +96,96 @@ export function removeFromFrontMatter(text, tag) {
     if (!items) return text;
 
     const matches = (val) => typeof val === "string" && tag.matches(Tag.toTag(val));
-
-    // Each edit is a {start, end, replacement} splice on `frontMatter`.
     const edits = [];
-    for (const item of items) {
-        const prop = item.key && item.key.value;
-        if (typeof prop !== "string" || !/^tags?$/i.test(prop)) continue;
 
-        const node = item.value;
-        if (isSeq(node) && node.flow) editFlowSeq(frontMatter, node, matches, edits);
-        else if (isSeq(node)) editBlockSeq(frontMatter, node, matches, edits);
-        else if (isScalar(node) && typeof node.value === "string") editScalar(frontMatter, node, matches, edits);
+    for (const pair of items) {
+        const prop = pair.key && pair.key.value;
+        if (typeof prop !== "string" || !/^tags?$/i.test(prop)) continue;
+        const node = pair.value;
+
+        if (isSeq(node)) {
+            const kept = node.items.filter(it => !matches(isScalar(it) ? it.value : it));
+            if (kept.length === node.items.length) continue;             // nothing matched
+            if (kept.length === 0) { edits.push(fieldRemoval(frontMatter, pair)); continue; }
+            if (node.flow) {
+                const inner = kept.map(it => frontMatter.slice(it.range[0], it.range[1])).join(", ");
+                edits.push({ start: node.range[0], end: node.range[1], replacement: "[" + inner + "]" });
+            } else {
+                for (const it of node.items) {
+                    if (matches(isScalar(it) ? it.value : it)) edits.push(lineRemoval(frontMatter, it.range[0]));
+                }
+            }
+        } else if (isScalar(node) && typeof node.value === "string") {
+            const value = String(node.value);
+            const parsedToks = value.split(/[\s,]+/).filter(Boolean);
+            const keptToks = parsedToks.filter(t => !matches(t));
+            if (keptToks.length === parsedToks.length) continue;         // nothing matched
+            if (keptToks.length === 0) { edits.push(fieldRemoval(frontMatter, pair)); continue; }
+
+            const quoted = frontMatter.slice(node.range[0], node.range[1]) !== value;
+            if (quoted) {
+                // Re-render the field so quoting/escaping stays correct.
+                const [s, e] = fieldSpan(frontMatter, pair);
+                edits.push({ start: s, end: e, replacement: renderField(prop, keptToks.join(" ")) });
+            } else {
+                editPlainScalar(frontMatter, node, matches, edits);      // preserves original separators
+            }
+        }
     }
 
     if (!edits.length) return text;
 
-    edits.sort((a, b) => b.start - a.start); // apply highest offset first
+    edits.sort((a, b) => b.start - a.start);
     let fm = frontMatter;
     for (const e of edits) fm = fm.slice(0, e.start) + e.replacement + fm.slice(e.end);
 
-    // Function replacement so `$`-patterns in `fm` are inserted literally.
-    return text.replace(frontMatter, () => fm);
+    // Slice-based splice (no regex) so nothing in `fm` is interpreted.
+    const at = text.indexOf(frontMatter);
+    return text.slice(0, at) + fm + text.slice(at + frontMatter.length);
 }
 
-// Block list: drop the whole line of each matching item.
-function editBlockSeq(fm, node, matches, edits) {
-    for (const it of node.items) {
-        if (!matches(isScalar(it) ? it.value : it)) continue;
-        const start = it.range[0];
-        const lineStart = fm.lastIndexOf("\n", start - 1) + 1;
-        let lineEnd = fm.indexOf("\n", start);
-        lineEnd = lineEnd === -1 ? fm.length : lineEnd + 1;
-        edits.push({ start: lineStart, end: lineEnd, replacement: "" });
-    }
+// Full source span of a field: from the start of its key line to the end of its
+// value's last line (trailing newline included).
+function fieldSpan(fm, pair) {
+    const keyStart = pair.key.range[0];
+    const start = fm.lastIndexOf("\n", keyStart - 1) + 1;
+    const valueEnd = pair.value.range[1];
+    const nl = fm.indexOf("\n", Math.max(valueEnd - 1, keyStart));
+    const end = nl === -1 ? fm.length : nl + 1;
+    return [start, end];
 }
 
-// Flow array: rebuild from the surviving items' original source text.
-function editFlowSeq(fm, node, matches, edits) {
-    const kept = node.items.filter(it => !matches(isScalar(it) ? it.value : it));
-    if (kept.length === node.items.length) return;
-    const inner = kept.map(it => fm.slice(it.range[0], it.range[1])).join(", ");
-    edits.push({ start: node.range[0], end: node.range[1], replacement: "[" + inner + "]" });
+function fieldRemoval(fm, pair) {
+    const [start, end] = fieldSpan(fm, pair);
+    return { start, end, replacement: "" };
 }
 
-// Scalar string: drop matching tokens plus one adjacent separator, preserving
-// the original separator style (commas vs spaces).
-function editScalar(fm, node, matches, edits) {
+// Drop the whole source line containing `offset`.
+function lineRemoval(fm, offset) {
+    const start = fm.lastIndexOf("\n", offset - 1) + 1;
+    let end = fm.indexOf("\n", offset);
+    end = end === -1 ? fm.length : end + 1;
+    return { start, end, replacement: "" };
+}
+
+// Plain (unquoted) scalar: drop matching tokens plus one adjacent separator,
+// preserving the original separator style (commas vs spaces).
+function editPlainScalar(fm, node, matches, edits) {
     const [start, end] = node.range;
-    const value = fm.slice(start, end);
-    const parts = value.split(/([\s,]+)/); // even = token, odd = separator
-    let removed = false;
-    for (let i = parts.length - (parts.length % 2 === 0 ? 2 : 1); i >= 0; i -= 2) {
+    const parts = fm.slice(start, end).split(/([\s,]+)/); // even = token, odd = separator
+    for (let i = parts.length - 1; i >= 0; i -= 2) {      // length is always odd
         if (!matches(parts[i])) continue;
-        removed = true;
         if (i + 1 < parts.length) parts.splice(i, 2);
         else if (i - 1 >= 0) parts.splice(i - 1, 2);
         else parts.splice(i, 1);
     }
-    if (!removed) return;
-
     const out = parts.join("").replace(/^[\s,]+|[\s,]+$/g, "");
-    // If the field is now empty, also drop the single space after the colon.
-    const s = (out === "" && fm[start - 1] === " ") ? start - 1 : start;
-    edits.push({ start: s, end, replacement: out });
+    edits.push({ start, end, replacement: out });
+}
+
+// Render a single `key: value` field via the YAML library (correct quoting).
+function renderField(prop, value) {
+    const tmp = new Document();
+    tmp.contents = tmp.createNode({ [prop]: value });
+    return tmp.toString(); // trailing newline included
 }
