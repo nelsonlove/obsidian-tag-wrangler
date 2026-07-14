@@ -140,6 +140,21 @@ throwaway tag on each surface.
 5. Add `nelsonlove/obsidian-tag-wrangler` in BRAT.
 6. Future upstream updates via `git merge upstream/master`.
 
+## Accepted trade-offs (surfaced in review, deliberately not fixed)
+
+- A YAML comment on a tag *line that is removed* is removed with it: an inline
+  comment on a block-list item being deleted, or a trailing comment on a `tags:`
+  line that empties out entirely. A comment on a *surviving* tag line is
+  preserved. Rationale: a comment on a line that no longer exists is orphaned;
+  preserving it would reintroduce empty-field cruft the earlier reviews flagged.
+- A rare multi-line *plain/folded* scalar tags value is re-rendered onto one
+  line (same as the multi-line flow-array case). The tag is still removed and the
+  YAML stays valid; only that one field's layout changes.
+- `findTargets` re-parses frontmatter that removal parses again (the metadata
+  cache does not expose frontmatter tag offsets), and the two frontmatter editors
+  (rename vs removal) are not merged — the rename path has no tests, so refactoring
+  it blind is riskier than the duplication. Behaviour is consistent between them.
+
 ## Out of scope (YAGNI)
 
 - Undo/restore of removed tags (dialog warns it is irreversible).

@@ -83,6 +83,15 @@ describe("removeFromFrontMatter — matching & removal", () => {
         expect(out).toContain("#project");              // alias survives
         expect(fmHasKey(out, "tags")).toBe(false);
     });
+    test("preserves a trailing comment when a quoted scalar survives removal", () => {
+        const out = removeFromFrontMatter('---\ntags: "#a #b" # keep this\n---\nx\n', new Tag("a"));
+        expect(out).toContain("# keep this");
+        expect(fmTags(out)).toBe("#b");
+    });
+    test("preserves CRLF line endings when re-rendering a quoted scalar", () => {
+        const out = removeFromFrontMatter('---\r\ntags: "#a #b"\r\nx: 1\r\n---\r\nbody\r\n', new Tag("a"));
+        expect(out).toContain('"#b"\r\n');
+    });
     test("returns the text unchanged when there is no frontmatter", () => {
         const text = "just a body with #project inline\n";
         expect(removeFromFrontMatter(text, new Tag("project"))).toBe(text);

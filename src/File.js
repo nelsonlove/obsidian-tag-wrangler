@@ -1,7 +1,7 @@
 import { Notice } from "obsidian";
 import { CST, parseDocument } from "yaml";
 import { Replacement } from "./Tag";
-import { removeInlineTags, removeFromFrontMatter, FrontMatterParseError } from "./removal";
+import { removeInlineTags, removeFromFrontMatter } from "./removal";
 
 export class File {
 
@@ -56,8 +56,8 @@ export class File {
             try {
                 text = removeFromFrontMatter(text, tag);
             } catch (e) {
-                if (!(e instanceof FrontMatterParseError)) throw e;
-                const msg = `YAML issue with ${this.filename}; skipping`;
+                // Never let one note abort the whole bulk run: warn and skip it.
+                const msg = `Could not process frontmatter of ${this.filename}; skipping`;
                 new Notice(msg);
                 console.error(msg, e);
                 return;

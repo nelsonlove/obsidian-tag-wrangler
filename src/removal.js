@@ -124,9 +124,9 @@ export function removeFromFrontMatter(text, tag) {
 
             const quoted = frontMatter.slice(node.range[0], node.range[1]) !== value;
             if (quoted) {
-                // Re-render the field so quoting/escaping stays correct.
-                const [s, e] = fieldSpan(frontMatter, pair);
-                edits.push({ start: s, end: e, replacement: renderField(prop, keptToks.join(" ")) });
+                // Re-render only the VALUE (correct quoting) and splice over the value's
+                // span, so the key, any trailing comment, and the line's EOL are preserved.
+                edits.push({ start: node.range[0], end: node.range[1], replacement: renderScalarValue(keptToks.join(" ")) });
             } else {
                 editPlainScalar(frontMatter, node, matches, edits);      // preserves original separators
             }
@@ -183,9 +183,9 @@ function editPlainScalar(fm, node, matches, edits) {
     edits.push({ start, end, replacement: out });
 }
 
-// Render a single `key: value` field via the YAML library (correct quoting).
-function renderField(prop, value) {
+// Render a scalar value via the YAML library so quoting/escaping stays correct.
+function renderScalarValue(value) {
     const tmp = new Document();
-    tmp.contents = tmp.createNode({ [prop]: value });
-    return tmp.toString(); // trailing newline included
+    tmp.contents = tmp.createNode(value);
+    return tmp.toString().replace(/\n$/, "");
 }
