@@ -1,7 +1,7 @@
 import { Notice } from "obsidian";
 import { CST, parseDocument } from "yaml";
 import { Replacement } from "./Tag";
-import { removeInlineTags, removeFromFrontMatter } from "./removal";
+import { removeInlineTags, removeFromFrontMatter, FrontMatterParseError } from "./removal";
 
 export class File {
 
@@ -52,7 +52,17 @@ export class File {
             console.error(msg, e);
             return;
         }
-        if (this.hasFrontMatter) text = removeFromFrontMatter(text, tag);
+        if (this.hasFrontMatter) {
+            try {
+                text = removeFromFrontMatter(text, tag);
+            } catch (e) {
+                if (!(e instanceof FrontMatterParseError)) throw e;
+                const msg = `YAML issue with ${this.filename}; skipping`;
+                new Notice(msg);
+                console.error(msg, e);
+                return;
+            }
+        }
         if (text !== original) {
             await this.app.vault.modify(file, text);
             return true;

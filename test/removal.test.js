@@ -6,6 +6,7 @@ import {
     removeInlineTags,
     removeFromFrontMatter,
     TagMismatchError,
+    FrontMatterParseError,
 } from "../src/removal.js";
 
 // Helper: build a tagPositions entry the way findTargets/metadataCache do.
@@ -100,5 +101,67 @@ describe("removeFromFrontMatter", () => {
     test("returns the text unchanged when there is no frontmatter", () => {
         const text = "just a body with #project inline\n";
         expect(removeFromFrontMatter(text, new Tag("project"))).toBe(text);
+    });
+});
+
+describe("removeFromFrontMatter — formatting preservation (review regressions)", () => {
+    test("preserves unrelated fields with leading zeros (no YAML re-normalization)", () => {
+        const text = "---\nnumber: 007\ntags: [a, project, b]\n---\nbody\n";
+        expect(removeFromFrontMatter(text, new Tag("project"))).toContain("number: 007");
+    });
+
+    test("preserves an unrelated YAML comment", () => {
+        const text = "---\ntags: [a, project]\nnote: keep  # important\n---\nbody\n";
+        expect(removeFromFrontMatter(text, new Tag("project"))).toContain("# important");
+    });
+
+    test("does not misinterpret $-patterns in unrelated values", () => {
+        const text = "---\nnote: a $& b\ntags: [project]\n---\nbody\n";
+        const out = removeFromFrontMatter(text, new Tag("project"));
+        expect(out).toBe("---\nnote: a $& b\ntags: []\n---\nbody\n");
+    });
+
+    test("preserves comma separators in a scalar tags field", () => {
+        const text = "---\ntags: a, project, b\n---\nbody\n";
+        expect(removeFromFrontMatter(text, new Tag("project"))).toContain("tags: a, b");
+    });
+
+    test("emptying a scalar field leaves no quoted-empty-string artifact", () => {
+        const text = "---\ntags: project\n---\nbody\n";
+        const out = removeFromFrontMatter(text, new Tag("project"));
+        expect(out).not.toContain('tags: ""');
+        expect(fmTags(out) || []).toHaveLength(0);
+    });
+
+    test("emptying a flow array leaves an empty array", () => {
+        const text = "---\ntags: [project]\n---\nbody\n";
+        expect(fmTags(removeFromFrontMatter(text, new Tag("project")))).toEqual([]);
+    });
+
+    test("preserves the exact source of surviving block-list items", () => {
+        const text = "---\ntags:\n  - a\n  - project\n  - b\n---\nbody\n";
+        const out = removeFromFrontMatter(text, new Tag("project"));
+        expect(out).toContain("  - a\n");
+        expect(out).toContain("  - b\n");
+        expect(out).not.toContain("project");
+    });
+
+    test("throws FrontMatterParseError on malformed frontmatter", () => {
+        const text = "---\ntags: [a, project\nbad: : :\n---\nbody\n";
+        expect(() => removeFromFrontMatter(text, new Tag("project"))).toThrow(FrontMatterParseError);
+    });
+});
+
+describe("removeInlineTag / removeInlineTags — review regressions", () => {
+    test("removes a list-item line that is only a bullet and the tag", () => {
+        const text = "intro\n- #project\noutro";
+        const start = text.indexOf("#project");
+        expect(removeInlineTag(text, start, start + "#project".length)).toBe("intro\noutro");
+    });
+
+    test("is order-independent: correct even when positions are supplied document-order", () => {
+        const text = "a #foo b #foo c";
+        const positions = [pos(text, "#foo", 0), pos(text, "#foo", 9)]; // ascending, the risky order
+        expect(removeInlineTags(text, positions)).toBe("a b c");
     });
 });
