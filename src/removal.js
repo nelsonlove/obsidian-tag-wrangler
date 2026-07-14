@@ -187,5 +187,7 @@ function editPlainScalar(fm, node, matches, edits) {
 function renderScalarValue(value) {
     const tmp = new Document();
     tmp.contents = tmp.createNode(value);
-    return tmp.toString().replace(/\n$/, "");
+    // lineWidth:0 disables folding — a bare value has no key indentation, so a
+    // folded continuation line would splice in at column 0 and corrupt the YAML.
+    return tmp.toString({ lineWidth: 0 }).replace(/\n$/, "");
 }

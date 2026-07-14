@@ -21,6 +21,10 @@ function fmTags(text) {
     const json = parseDocument(fm).toJSON() || {};
     return json.tags ?? json.tag;
 }
+function fmValid(text) {
+    const fm = text.split(/^---\r?$\n?/m, 2)[1];
+    return parseDocument(fm).errors.length === 0;
+}
 function fmHasKey(text, key) {
     const fm = text.split(/^---\r?$\n?/m, 2)[1];
     return Object.prototype.hasOwnProperty.call(parseDocument(fm).toJSON() || {}, key);
@@ -100,6 +104,15 @@ describe("removeFromFrontMatter — matching & removal", () => {
         expect(() => removeFromFrontMatter("---\ntags: [a, project\nbad: : :\n---\nx\n", new Tag("project"))).toThrow(FrontMatterParseError);
     });
 });
+
+    test("re-renders a long surviving quoted scalar as valid single-line YAML", () => {
+        const survivors = Array.from({ length: 12 }, (_, i) => `alpha/topic${i}`);
+        const text = `---\ntags: "${survivors.join(" ")} removeme"\n---\nbody\n`;
+        const out = removeFromFrontMatter(text, new Tag("removeme"));
+        expect(fmValid(out)).toBe(true);                 // no column-0 fold corruption
+        expect(fmTags(out)).toBe(survivors.join(" "));   // every survivor intact
+        expect(out).not.toContain("removeme");
+    });
 
 describe("removeFromFrontMatter — emptied fields are removed", () => {
     test("flow array emptied -> field removed", () => {

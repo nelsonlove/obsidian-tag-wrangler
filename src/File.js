@@ -50,7 +50,7 @@ export class File {
             const msg = `File ${this.filename} has changed; skipping`;
             new Notice(msg);
             console.error(msg, e);
-            return;
+            return "skipped";
         }
         if (this.hasFrontMatter) {
             try {
@@ -60,7 +60,7 @@ export class File {
                 const msg = `Could not process frontmatter of ${this.filename}; skipping`;
                 new Notice(msg);
                 console.error(msg, e);
-                return;
+                return "skipped";
             }
         }
         if (text !== original) {
