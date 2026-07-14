@@ -41,32 +41,38 @@ export class File {
 
     /** @param {import("./Tag").Tag} tag */
     async removed(tag) {
-        const file = this.app.vault.getAbstractFileByPath(this.filename);
-        const original = await this.app.vault.read(file);
-        let text;
+        // Never let one note abort the whole bulk run: any failure (I/O, changed
+        // file, bad frontmatter) warns and skips that note, reported as "skipped".
         try {
-            text = removeInlineTags(original, this.tagPositions);
-        } catch (e) {
-            const msg = `File ${this.filename} has changed; skipping`;
-            new Notice(msg);
-            console.error(msg, e);
-            return "skipped";
-        }
-        if (this.hasFrontMatter) {
+            const file = this.app.vault.getAbstractFileByPath(this.filename);
+            const original = await this.app.vault.read(file);
+            let text;
             try {
-                text = removeFromFrontMatter(text, tag);
+                text = removeInlineTags(original, this.tagPositions);
             } catch (e) {
-                // Never let one note abort the whole bulk run: warn and skip it.
-                const msg = `Could not process frontmatter of ${this.filename}; skipping`;
-                new Notice(msg);
-                console.error(msg, e);
-                return "skipped";
+                return this.skip(e, `File ${this.filename} has changed`);
             }
+            if (this.hasFrontMatter) {
+                try {
+                    text = removeFromFrontMatter(text, tag);
+                } catch (e) {
+                    return this.skip(e, `Could not process frontmatter of ${this.filename}`);
+                }
+            }
+            if (text !== original) {
+                await this.app.vault.modify(file, text);
+                return true;
+            }
+        } catch (e) {
+            return this.skip(e, `Could not update ${this.filename}`);
         }
-        if (text !== original) {
-            await this.app.vault.modify(file, text);
-            return true;
-        }
+    }
+
+    /** Warn about a skipped note and signal it to the caller. */
+    skip(e, message) {
+        new Notice(message + "; skipping");
+        console.error(message, e);
+        return "skipped";
     }
     /** @param {Replacement} replace */
     replaceInFrontMatter(text, replace) {
