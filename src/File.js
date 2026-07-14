@@ -1,6 +1,7 @@
 import { Notice } from "obsidian";
 import { CST, parseDocument } from "yaml";
 import { Replacement } from "./Tag";
+import { removeInlineTags, removeFromFrontMatter } from "./removal";
 
 export class File {
 
@@ -38,6 +39,25 @@ export class File {
         }
     }
 
+    /** @param {import("./Tag").Tag} tag */
+    async removed(tag) {
+        const file = this.app.vault.getAbstractFileByPath(this.filename);
+        const original = await this.app.vault.read(file);
+        let text;
+        try {
+            text = removeInlineTags(original, this.tagPositions);
+        } catch (e) {
+            const msg = `File ${this.filename} has changed; skipping`;
+            new Notice(msg);
+            console.error(msg, e);
+            return;
+        }
+        if (this.hasFrontMatter) text = removeFromFrontMatter(text, tag);
+        if (text !== original) {
+            await this.app.vault.modify(file, text);
+            return true;
+        }
+    }
     /** @param {Replacement} replace */
     replaceInFrontMatter(text, replace) {
         const [empty, frontMatter] = text.split(/^---\r?$\n?/m, 2);

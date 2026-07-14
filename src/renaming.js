@@ -38,6 +38,36 @@ export async function renameTag(app, tagName, toName=tagName) {
     return new Notice(`Operation ${progress.aborted ? "cancelled" : "complete"}: ${renamed} file(s) updated`);
 }
 
+export async function removeTag(app, tagName) {
+    const tag = new Tag(tagName);
+    const targets = await findTargets(app, tag);
+    if (!targets) return;  // search cancelled
+    if (!targets.length) {
+        return new Notice(`No notes contain #${tag.name} or its sub-tags.`);
+    }
+
+    const proceed = await new Confirm()
+        .setTitle(`Remove #${tag.name} and its sub-tags?`)
+        .setContent(
+            activeWindow.createEl("p", undefined, el => { el.innerHTML =
+                `This will remove <code>#${tag.name}</code> (and any sub-tags) from <b>${
+                    targets.length}</b> note(s).<br><br>This <b>cannot</b> be undone.`;
+            })
+        )
+        .setup(c => { c.setOk("Remove"); c.okButton.addClass("mod-warning"); })
+        .confirm();
+    if (!proceed) return;
+
+    const progress = new Progress(`Removing #${tag.name}/*`, "Processing files...");
+    let removed = 0;
+    await progress.forEach(targets, async (target) => {
+        progress.message = "Processing " + target.basename;
+        if (await target.removed(tag)) removed++;
+    });
+
+    return new Notice(`Operation ${progress.aborted ? "cancelled" : "complete"}: ${removed} file(s) updated`);
+}
+
 function allTags(app) {
     return Object.keys(app.metadataCache.getTags());
 }
