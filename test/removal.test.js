@@ -153,3 +153,37 @@ describe("removeFromFrontMatter — preserves unrelated content", () => {
         expect(out).not.toContain("project");
     });
 });
+
+describe("removeFromFrontMatter — whitespace-separated tags inside one element", () => {
+    test("flow element with spaces: only the matching token is dropped", () => {
+        expect(fmTags(removeFromFrontMatter("---\ntags: [foo, a project b, bar]\n---\nx\n", new Tag("project"))))
+            .toEqual(["foo", "a b", "bar"]);
+    });
+    test("block element with spaces: only the matching token is dropped", () => {
+        expect(fmTags(removeFromFrontMatter("---\ntags:\n  - a project b\n---\nx\n", new Tag("project"))))
+            .toEqual(["a b"]);
+    });
+    test("element whose every token matches is dropped entirely", () => {
+        expect(fmTags(removeFromFrontMatter("---\ntags: [keep, project project/deep]\n---\nx\n", new Tag("project"))))
+            .toEqual(["keep"]);
+    });
+    test("a found-but-untouched shape used to survive silently — now the token is removed", () => {
+        const out = removeFromFrontMatter("---\ntags: [a project b]\n---\nx\n", new Tag("project"));
+        expect(out).not.toContain("project");
+        expect(fmTags(out)).toEqual(["a b"]);
+    });
+});
+
+describe("TagMismatchError diagnostics", () => {
+    test("carries the found vs expected text so a changed-file skip is debuggable", () => {
+        const positions = [{ position: { start: { offset: 4 }, end: { offset: 12 } }, tag: "#project" }];
+        try {
+            removeInlineTags("foo bar baz", positions);
+            throw new Error("expected removeInlineTags to throw");
+        } catch (e) {
+            expect(e).toBeInstanceOf(TagMismatchError);
+            expect(e.expected).toBe("#project");
+            expect(e.found).toBe("bar baz");
+        }
+    });
+});

@@ -41,17 +41,29 @@ export class File {
 
     /** @param {import("./Tag").Tag} tag */
     async removed(tag) {
-        // Never let one note abort the whole bulk run: any failure (I/O, changed
-        // file, bad frontmatter) warns and skips that note, reported as "skipped".
+        // Never let one note abort the whole bulk run, and never let a note the
+        // scan matched drop out of the tally silently: any hard failure warns and
+        // skips; a note left unchanged is surfaced too, so the tag can't quietly
+        // survive a run the user is told "completed".
         try {
             const file = this.app.vault.getAbstractFileByPath(this.filename);
             const original = await this.app.vault.read(file);
-            let text;
+            let text = original;
+
+            // The inline pass is guarded against a body that changed since the scan.
+            // If it no longer matches we skip the inline edits but still attempt the
+            // frontmatter, which is removed against the current on-disk text — so a
+            // stale body no longer aborts an otherwise-safe frontmatter removal.
+            let inlineStale = false;
             try {
-                text = removeInlineTags(original, this.tagPositions);
+                text = removeInlineTags(text, this.tagPositions);
             } catch (e) {
-                return this.skip(e, `File ${this.filename} has changed`);
+                inlineStale = true;
+                console.error(`Inline tags in ${this.filename} changed since scan; leaving them`, e);
+                if (e && e.found !== undefined)
+                    console.debug("expected", JSON.stringify(e.expected), "but found", JSON.stringify(e.found));
             }
+
             if (this.hasFrontMatter) {
                 try {
                     text = removeFromFrontMatter(text, tag);
@@ -59,10 +71,20 @@ export class File {
                     return this.skip(e, `Could not process frontmatter of ${this.filename}`);
                 }
             }
+
             if (text !== original) {
                 await this.app.vault.modify(file, text);
-                return true;
+                return inlineStale ? "partial" : true;
             }
+            // Matched by the scan but nothing was removed: the file changed since
+            // the scan, or the tag sits in a shape the transforms don't rewrite.
+            // Report it instead of dropping it from both tallies.
+            return this.skip(
+                new Error(`#${tag.name} not removed from ${this.filename}`),
+                inlineStale
+                    ? `${this.filename} changed since scan; #${tag.name} not removed`
+                    : `${this.filename} still contains #${tag.name} in an unsupported form`
+            );
         } catch (e) {
             return this.skip(e, `Could not update ${this.filename}`);
         }

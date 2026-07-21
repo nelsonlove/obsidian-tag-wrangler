@@ -4,11 +4,13 @@ import { Tag } from "./Tag";
 // Raised when a recorded tag position no longer matches the file's current
 // text (the file changed between the scan and the removal pass).
 export class TagMismatchError extends Error {
-    constructor(start, end) {
+    constructor(start, end, found, expected) {
         super(`Tag position ${start}..${end} no longer matches file text`);
         this.name = "TagMismatchError";
         this.start = start;
         this.end = end;
+        this.found = found;       // the text now at the recorded span
+        this.expected = expected; // the tag the scan recorded there
     }
 }
 
@@ -68,7 +70,7 @@ export function removeInlineTags(text, tagPositions) {
     );
     for (const { position: { start, end }, tag } of ordered) {
         if (text.slice(start.offset, end.offset) !== tag) {
-            throw new TagMismatchError(start.offset, end.offset);
+            throw new TagMismatchError(start.offset, end.offset, text.slice(start.offset, end.offset), tag);
         }
         text = removeInlineTag(text, start.offset, end.offset);
     }
@@ -104,16 +106,34 @@ export function removeFromFrontMatter(text, tag) {
         const node = pair.value;
 
         if (isSeq(node)) {
-            const kept = node.items.filter(it => !matches(isScalar(it) ? it.value : it));
-            if (kept.length === node.items.length) continue;             // nothing matched
-            if (kept.length === 0) { edits.push(fieldRemoval(frontMatter, pair)); continue; }
+            // A single element may itself contain whitespace-separated tags, which
+            // Obsidian treats as distinct — so match per token and keep survivors.
+            const classify = (it) => {
+                const val = isScalar(it) ? it.value : it;
+                if (typeof val !== "string") return { kind: "keep" };
+                const toks = String(val).split(/\s+/).filter(Boolean);
+                const survivors = toks.filter(t => !matches(t));
+                if (survivors.length === toks.length) return { kind: "keep" };  // no token matched
+                if (survivors.length === 0) return { kind: "drop" };            // whole element goes
+                return { kind: "edit", value: survivors.join(" ") };            // keep the rest
+            };
+            const status = node.items.map(classify);
+            if (status.every(s => s.kind === "keep")) continue;              // nothing matched
+            if (status.every(s => s.kind === "drop")) { edits.push(fieldRemoval(frontMatter, pair)); continue; }
             if (node.flow) {
-                const inner = kept.map(it => frontMatter.slice(it.range[0], it.range[1])).join(", ");
+                const inner = node.items
+                    .map((it, i) => status[i].kind === "drop" ? null
+                        : status[i].kind === "edit" ? renderScalarValue(status[i].value)
+                        : frontMatter.slice(it.range[0], it.range[1]))
+                    .filter(v => v !== null)
+                    .join(", ");
                 edits.push({ start: node.range[0], end: node.range[1], replacement: "[" + inner + "]" });
             } else {
-                for (const it of node.items) {
-                    if (matches(isScalar(it) ? it.value : it)) edits.push(lineRemoval(frontMatter, it.range[0]));
-                }
+                node.items.forEach((it, i) => {
+                    if (status[i].kind === "drop") edits.push(lineRemoval(frontMatter, it.range[0]));
+                    else if (status[i].kind === "edit")
+                        edits.push({ start: it.range[0], end: it.range[1], replacement: renderScalarValue(status[i].value) });
+                });
             }
         } else if (isScalar(node) && typeof node.value === "string") {
             const value = String(node.value);

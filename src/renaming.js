@@ -60,16 +60,18 @@ export async function removeTag(app, tagName) {
     if (!proceed) return;
 
     const progress = new Progress(`Removing #${tag.name}/*`, "Processing files...");
-    let removed = 0, skipped = 0;
+    let removed = 0, partial = 0, skipped = 0;
     await progress.forEach(targets, async (target) => {
         progress.message = "Processing " + target.basename;
         const result = await target.removed(tag);
         if (result === true) removed++;
+        else if (result === "partial") { removed++; partial++; }
         else if (result === "skipped") skipped++;
     });
 
     let summary = `Operation ${progress.aborted ? "cancelled" : "complete"}: ${removed} file(s) updated`;
-    if (skipped) summary += `; ${skipped} skipped due to errors (see console)`;
+    if (partial) summary += ` (${partial} only partly — a changed file left some tags; see console)`;
+    if (skipped) summary += `; ${skipped} skipped (see console)`;
     return new Notice(summary);
 }
 
