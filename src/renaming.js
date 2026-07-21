@@ -38,11 +38,46 @@ export async function renameTag(app, tagName, toName=tagName) {
     return new Notice(`Operation ${progress.aborted ? "cancelled" : "complete"}: ${renamed} file(s) updated`);
 }
 
+export async function removeTag(app, tagName) {
+    const tag = new Tag(tagName);
+    // Removal never touches aliases, so alias-only files must not inflate the count.
+    const targets = await findTargets(app, tag, {includeAliases: false});
+    if (!targets) return;  // search cancelled
+    if (!targets.length) {
+        return new Notice(`No notes contain #${tag.name} or its sub-tags.`);
+    }
+
+    const proceed = await new Confirm()
+        .setTitle(`Remove #${tag.name} and its sub-tags?`)
+        .setContent(
+            activeWindow.createEl("p", undefined, el => { el.innerHTML =
+                `This will remove <code>#${tag.name}</code> (and any sub-tags) from <b>${
+                    targets.length}</b> note(s).<br><br>This <b>cannot</b> be undone.`;
+            })
+        )
+        .setup(c => { c.setOk("Remove"); c.okButton.addClass("mod-warning"); })
+        .confirm();
+    if (!proceed) return;
+
+    const progress = new Progress(`Removing #${tag.name}/*`, "Processing files...");
+    let removed = 0, skipped = 0;
+    await progress.forEach(targets, async (target) => {
+        progress.message = "Processing " + target.basename;
+        const result = await target.removed(tag);
+        if (result === true) removed++;
+        else if (result === "skipped") skipped++;
+    });
+
+    let summary = `Operation ${progress.aborted ? "cancelled" : "complete"}: ${removed} file(s) updated`;
+    if (skipped) summary += `; ${skipped} skipped due to errors (see console)`;
+    return new Notice(summary);
+}
+
 function allTags(app) {
     return Object.keys(app.metadataCache.getTags());
 }
 
-export async function findTargets(app, tag) {
+export async function findTargets(app, tag, {includeAliases = true} = {}) {
     const targets = [];
     const progress = new Progress(`Searching for ${tag}/*`, "Matching files...");
     await progress.forEach(
@@ -51,7 +86,9 @@ export async function findTargets(app, tag) {
             let { frontmatter, tags } = app.metadataCache.getCache(filename) || {};
             tags = (tags || []).filter(t => t.tag && tag.matches(t.tag)).reverse(); // last positions first
             const fmtags = (parseFrontMatterTags(frontmatter) || []).filter(tag.matches);
-            const aliasTags = (parseFrontMatterAliases(frontmatter) || []).filter(Tag.isTag).filter(tag.matches);
+            const aliasTags = includeAliases
+                ? (parseFrontMatterAliases(frontmatter) || []).filter(Tag.isTag).filter(tag.matches)
+                : [];
             if (tags.length || fmtags.length || aliasTags.length)
                 targets.push(new File(app, filename, tags, fmtags.length + aliasTags.length));
         }
